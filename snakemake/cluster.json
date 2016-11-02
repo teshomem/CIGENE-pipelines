@@ -1,0 +1,38 @@
+{
+    "__default__" :
+    {
+        "n" : 1,
+        "N" : 1,
+        "partition" : "smallmem",
+        "j": "ALL",
+        "o": "default"
+    },
+    "trimming": {
+        "n": 1,
+        "N" : 1,
+        "partition": "smallmem",
+        "j": "trimming",
+        "o": "trimming"
+    },
+    "star": {
+        "n": 20,
+        "N" : 1,
+        "partition": "smallmem",
+        "j": "star",
+        "o": "star"
+    },
+    "samtools": {
+        "n": 5,
+        "N": 1,
+        "partition": "smallmem",
+        "j": "samtools",
+        "o": "samtools"
+    },
+    "htseq": {
+        "n": 1,
+        "N": 1,
+        "partition": "smallmem",
+        "j": "htseq",
+        "o": "htseq"
+    }
+}

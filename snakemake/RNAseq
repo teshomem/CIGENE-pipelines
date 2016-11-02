@@ -1,0 +1,167 @@
+"""
+Author: D. Teshome
+Affiliation: NMBU 
+Aim: A simple Snakemake workflow to process paired-end stranded RNA-Seq.
+Date: Sat Oct 2 18:16:33 CEST 2016
+Run: module load anaconda3/2.4.1; snakemake -j 18 --cluster-config cluster.json --cluster "sbatch -p {cluster.partition} -n {cluster.n} -N {cluster.N} -J {cluster.j} -o {cluster.o}_%j.out" -s RNAseq   
+Latest modification: 
+Syntax: python tabstop=2 expandtab
+Coding: utf-8
+  - todo
+"""
+
+##--------------------------------------------------------------------------------------##
+## python functions to be used in the pipeline 
+##--------------------------------------------------------------------------------------##
+
+def message(m):
+  print(m)   
+
+##--------------------------------------------------------------------------------------##
+## Working directory : Make necessary changes here                                                                   
+##--------------------------------------------------------------------------------------##
+
+COMMON_DIR = "/local/genome/references/"
+BASE_DIR = "/mnt/users/teshmu/MOL8008/"
+WDIR = BASE_DIR + "test/"
+workdir: WDIR
+message("The current working directory is " + WDIR)
+
+##--------------------------------------------------------------------------------------##
+## Variables declaration                          
+## Declaring some variables used by tools... 
+## (GTF file, INDEX, etc)
+##--------------------------------------------------------------------------------------##
+
+INDEX   = COMMON_DIR + "Salmo_salar/ICSASG_v2/INDEX/STAR_chr-and-geneScaffolds"
+GTF     = COMMON_DIR + "Salmo_salar/ICSASG_v2/RefSeq_100/Salmo_salar-annotation.gff3"
+INPUT   = BASE_DIR + "2014_lice_data_spleen/renamed/"
+
+##--------------------------------------------------------------------------------------##
+## The list of samples to be processed
+##--------------------------------------------------------------------------------------##
+
+SAMPLES, = glob_wildcards("renamed/{sample}.fastq.gz")
+
+for smp in SAMPLES:
+  message("Sample " + smp + " will be processed")
+
+SAMPLE = [re.sub("_R[12]", "", elem) for elem in SAMPLES]
+
+ALL_CUTADAPT = expand("fastq_trim/{sample}_trim.fastq.gz", sample=SAMPLES)
+ALL_STAR = expand("star/{sample}Aligned.out.bam", sample=SAMPLE)
+ALL_SAMTOOLS = expand("star/{sample}Aligned.sortedByName.out.bam", sample=SAMPLE)
+ALL_HTSEQ = expand("count/{sample}.count", sample=SAMPLE)
+
+rule all: 
+  input: ALL_CUTADAPT + ALL_STAR + ALL_SAMTOOLS + ALL_HTSEQ
+  
+##--------------------------------------------------------------------------------------##
+## Trimming  anaconda/1.9.1
+##--------------------------------------------------------------------------------------##
+
+rule trimming:
+  input: 
+    fwd="renamed/{sample}_R1.fastq.gz", 
+    rev="renamed/{sample}_R2.fastq.gz"
+  output: 
+    fwd="fastq_trim/{sample}_R1_trim.fastq.gz", 
+    rev="fastq_trim/{sample}_R2_trim.fastq.gz"
+  message: 
+    "cutadapt {input.fwd} {input.rev}: / {output.fwd} {output.rev}"
+  shell: """
+  module load anaconda;
+  module list;
+  cutadapt \
+    -q 20 \
+    -O 8 \
+    --minimum-length 40 \
+    -a AGATCGGAAGAGC \
+    -A AGATCGGAAGAGC \
+    -o {output.fwd} \
+    -p {output.rev} {input.fwd} {input.rev}
+  """
+
+##--------------------------------------------------------------------------------------##
+## Alignment star/2.5.2a 
+##--------------------------------------------------------------------------------------##
+
+rule star:
+  input:
+    fq1 = "fastq_trim/{sample}_R1_trim.fastq.gz",
+    fq2 = "fastq_trim/{sample}_R2_trim.fastq.gz"
+  params: 
+    outbam="star/{sample}", 
+    id="{sample}", 
+    lb="{sample}", sm="{sample}"
+  output:
+    "star/{sample}Aligned.out.bam"
+  log: 
+    "log/$SLURM_JOBID_{sample}.Aligned.out.bam"
+  threads: 20 
+  message: 
+    "STARlong {input}: / {output}"
+  shell: """
+  module load star;
+  STARlong \
+    --limitGenomeGenerateRAM 62000000000 \
+    --genomeDir /local/genome/references/Salmo_salar/ICSASG_v2/INDEX/STAR_chr-and-geneScaffolds \
+    --readFilesCommand zcat \
+    --readFilesIn {input.fq1} {input.fq2} \
+    --outFileNamePrefix {params.outbam} \
+    --outSAMmode Full \
+    --outSAMtype BAM Unsorted \
+    --outSAMstrandField intronMotif \
+    --runThreadN {threads} \
+    --readMatesLengthsIn NotEqual \
+    --outSAMattrRGline ID:{params.id} PL:illumina LB:{params.lb} SM:{params.sm}
+  """
+
+##--------------------------------------------------------------------------------------##
+## Sorting bam files samtools/1.3 
+##--------------------------------------------------------------------------------------##
+
+rule samtool:
+  input:
+    bam = "star/{sample}Aligned.out.bam"
+  params: 
+    sortedbam="star/{sample}Aligned.sortedByName.out.bam", 
+    id="{sample}", 
+    bamfile="star/{sample}Aligned.out.bam"
+  output:
+    "star/{sample}Aligned.sortedByName.out.bam"
+  log: 
+    "log/$SLURM_JOBID_{sample}.sort_bam_files"
+  threads: 5
+  message: 
+    "samtools {input}: {threads} / {output}"
+  shell: """
+  module load samtools;
+  samtools sort \
+    -n -@ {threads} \
+    -o {params.sortedbam} \
+    -T {params.sortedbam}'.temp' \
+    -O bam {params.bamfile}
+  """
+##--------------------------------------------------------------------------------------##
+## Gene counts samtools/1.3 and anaconda/1.9.1
+##--------------------------------------------------------------------------------------##
+
+rule htseq:
+  input:
+    bam = "star/{sample}Aligned.sortedByName.out.bam"
+  params: 
+    sortedbam="star/{sample}Aligned.sortedByName.out.bam", 
+    id="{sample}", cout="count/{sample}.count" 
+  output:
+    "count/{sample}.count"
+  log: 
+    "log/$SLURM_JOBID_{sample}.count"
+  message: 
+    "htseq {input}: / {output}"
+  shell: """
+  module load samtools anaconda;
+  samtools view {params.sortedbam} | htseq-count \
+    -i gene_id \
+    -q -s reverse - /local/genome/references/Salmo_salar/ICSASG_v2/RefSeq_100/Salmo_salar-annotation.gff3 > {params.cout} 
+  """
